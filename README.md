@@ -209,6 +209,16 @@ pnpm test
 
 Os testes são executados uma única vez em modo headless. Eles cobrem as principais validações, cálculos e restrições de folhas fechadas.
 
+A suíte inclui testes unitários para:
+
+- `FolhaListaComponent`
+- `FolhaDetalhesComponent`
+- `FolhaFormComponent`
+- `ItemFormComponent`
+- `ConfirmModalComponent`
+- `FolhaPagamentoService`
+- Validações e cálculos das regras de negócio
+
 ## Gerando o build de produção nativamente
 
 ```bash
