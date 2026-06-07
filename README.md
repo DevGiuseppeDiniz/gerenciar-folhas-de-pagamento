@@ -8,6 +8,85 @@ A aplicação publicada pode ser acessada pela URL configurada na Vercel.
 
 Para avaliar o código e executar o projeto localmente, siga as instruções abaixo.
 
+## Forma mais simples: Docker
+
+O Docker é o caminho recomendado para avaliação porque fornece dentro do contêiner:
+
+- Node.js 22.14.0
+- pnpm 10.12.1
+- Todas as dependências do projeto
+- Chromium para execução dos testes
+
+Nesse fluxo, não é necessário instalar Node.js, pnpm ou Chrome na máquina. Basta instalar:
+
+1. [Git](https://git-scm.com/downloads)
+2. [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+Confirme que o Docker Desktop está aberto e funcionando:
+
+```bash
+docker --version
+docker compose version
+```
+
+Clone o projeto:
+
+```bash
+git clone https://github.com/DevGiuseppeDiniz/gerenciar-folhas-de-pagamento.git
+cd gerenciar-folhas-de-pagamento
+```
+
+Construa a imagem e inicie a aplicação:
+
+```bash
+docker compose up --build
+```
+
+Acesse [http://localhost:3000](http://localhost:3000).
+
+Na primeira execução, o Docker precisa baixar a imagem base e as dependências. As próximas execuções aproveitam o cache e normalmente são mais rápidas.
+
+Para encerrar, pressione `Ctrl+C` e execute:
+
+```bash
+docker compose down
+```
+
+### Testes com Docker
+
+```bash
+docker compose run --rm test
+```
+
+O contêiner já possui o Chromium necessário para os testes headless.
+
+### Build de produção com Docker
+
+```bash
+docker compose run --rm build
+```
+
+Esse comando valida se a aplicação consegue gerar o bundle de produção. O resultado é criado dentro do contêiner descartável; para avaliar o projeto, o resultado relevante é a conclusão do comando sem erros.
+
+### Reconstruindo após alterações
+
+Depois de modificar dependências ou arquivos de configuração, reconstrua a imagem:
+
+```bash
+docker compose build --no-cache
+docker compose up
+```
+
+Alterações comuns no código também exigem reconstrução porque o contêiner não utiliza volumes do diretório local:
+
+```bash
+docker compose up --build
+```
+
+## Execução nativa
+
+As instruções a seguir são uma alternativa para quem prefere executar diretamente com Node.js e pnpm.
+
 ## Funcionalidades
 
 - Criar, listar, editar e remover folhas de pagamento.
@@ -48,7 +127,7 @@ Para tornar a instalação reproduzível, o projeto fixa:
 
 Não apague o `pnpm-lock.yaml` e não substitua o comando de instalação recomendado por outro gerenciador de pacotes.
 
-## Pré-requisitos
+## Pré-requisitos da execução nativa
 
 Instale os seguintes programas:
 
@@ -84,7 +163,7 @@ Caso o sistema não permita executar `corepack enable` sem privilégios, abra o 
 npm install --global pnpm@10.12.1
 ```
 
-## Clonando o projeto
+## Clonando o projeto para execução nativa
 
 ```bash
 git clone https://github.com/DevGiuseppeDiniz/gerenciar-folhas-de-pagamento.git
@@ -93,7 +172,7 @@ cd gerenciar-folhas-de-pagamento
 
 Usuários de `nvm`, `nvm-windows`, `fnm` ou `asdf` podem selecionar a versão indicada por `.nvmrc` ou `.node-version` antes de instalar as dependências.
 
-## Instalando as dependências
+## Instalando as dependências nativamente
 
 Use o lockfile para instalar exatamente a árvore de dependências validada:
 
@@ -103,7 +182,7 @@ pnpm install --frozen-lockfile
 
 O parâmetro `--frozen-lockfile` impede alterações silenciosas no lockfile e encerra a instalação caso `package.json` e `pnpm-lock.yaml` estejam inconsistentes.
 
-## Executando localmente
+## Executando nativamente
 
 ```bash
 pnpm dev
@@ -113,7 +192,7 @@ Acesse [http://localhost:3000](http://localhost:3000).
 
 Para encerrar o servidor, pressione `Ctrl+C` no terminal.
 
-## Executando os testes
+## Executando os testes nativamente
 
 Com o Google Chrome ou Chromium instalado:
 
@@ -123,7 +202,7 @@ pnpm test
 
 Os testes são executados uma única vez em modo headless. Eles cobrem as principais validações, cálculos e restrições de folhas fechadas.
 
-## Gerando o build de produção
+## Gerando o build de produção nativamente
 
 ```bash
 pnpm build
@@ -190,6 +269,15 @@ pnpm ng serve --port 4200
 
 Depois acesse `http://localhost:4200`.
 
+Com Docker, altere o lado esquerdo do mapeamento de porta em `compose.yaml`, por exemplo:
+
+```yaml
+ports:
+  - "4200:3000"
+```
+
+Depois acesse `http://localhost:4200`.
+
 ### Chrome não encontrado durante os testes
 
 Instale o Google Chrome ou defina a variável `CHROME_BIN` com o caminho do executável do Chrome/Chromium.
@@ -217,6 +305,16 @@ src/app/
 | --- | --- |
 | `pnpm dev` | Inicia o servidor local na porta 3000 |
 | `pnpm test` | Executa os testes unitários no Chrome Headless |
+| `pnpm test:docker` | Executa os testes com os parâmetros necessários no contêiner |
 | `pnpm build` | Gera o build otimizado de produção |
 | `pnpm check` | Executa testes e build em sequência |
 | `pnpm watch` | Recompila o projeto ao detectar alterações |
+
+## Arquivos Docker
+
+| Arquivo | Finalidade |
+| --- | --- |
+| `Dockerfile` | Define Node.js, pnpm, Chromium e a aplicação |
+| `compose.yaml` | Disponibiliza os serviços `app`, `test` e `build` |
+| `.dockerignore` | Exclui caches e arquivos locais da imagem |
+| `karma.conf.js` | Configura o Chrome Headless para execução em contêiner |

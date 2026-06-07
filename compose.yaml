@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "3000:3000"
+
+  test:
+    build:
+      context: .
+    command: pnpm test:docker
+    profiles:
+      - tools
+
+  build:
+    build:
+      context: .
+    command: pnpm build
+    profiles:
+      - tools

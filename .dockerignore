@@ -1,0 +1,10 @@
+.angular
+.git
+.gitignore
+.pnpm-runtime
+.pnpm.tgz
+coverage
+dist
+node_modules
+.dev-server.*.log
+.DS_Store
