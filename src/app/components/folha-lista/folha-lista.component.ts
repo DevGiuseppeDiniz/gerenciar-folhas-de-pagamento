@@ -1,7 +1,7 @@
 import { Component, inject, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { Observable, Subscription, finalize, map, take } from 'rxjs';
 import { FolhaPagamentoService } from '../../services/folha-pagamento.service';
 import { FolhaPagamento, FolhaStatus } from '../../models/folha-pagamento.model';
 import { FolhaFormComponent } from '../folha-form/folha-form.component';
@@ -19,6 +19,10 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
     ConfirmModalComponent,
   ],
   template: `
+    @if (erroOperacao) {
+      <div class="alert-error" role="alert">{{ erroOperacao }}</div>
+    }
+
     <div class="lista-header">
       <div class="lista-titulo">
         <h2>Folhas de Pagamento</h2>
@@ -37,7 +41,7 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
             <option value="fechada">Fechada</option>
           </select>
         </div>
-        <button class="btn btn-primary" (click)="abrirFormNova()">
+        <button class="btn btn-primary" [disabled]="processando" (click)="abrirFormNova()">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14"/>
           </svg>
@@ -46,7 +50,11 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
       </div>
     </div>
 
-    @if (folhasFiltradas.length === 0) {
+    @if (carregandoLista) {
+      <div class="loading-state card" role="status">
+        Carregando folhas...
+      </div>
+    } @else if (folhasFiltradas.length === 0) {
       <div class="empty-state card">
         <div class="empty-icon">
           <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -153,6 +161,16 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
     }
   `,
   styles: [`
+    .alert-error {
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      color: #991b1b;
+      background-color: #fee2e2;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+    }
+
     .lista-header {
       display: flex;
       justify-content: space-between;
@@ -207,6 +225,13 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
     .empty-state {
       text-align: center;
       padding: 3rem 2rem;
+    }
+
+    .loading-state {
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted-foreground);
+      font-size: 0.875rem;
     }
 
     .empty-icon {
@@ -348,7 +373,7 @@ import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component'
 })
 export class FolhaListaComponent implements OnInit, OnDestroy {
   private folhaService = inject(FolhaPagamentoService);
-  private subscription: Subscription | null = null;
+  private readonly subscriptions = new Subscription();
 
   folhas: FolhaPagamento[] = [];
   folhasFiltradas: FolhaPagamento[] = [];
@@ -358,16 +383,28 @@ export class FolhaListaComponent implements OnInit, OnDestroy {
   folhaEditando: FolhaPagamento | null = null;
   folhaSelecionada: FolhaPagamento | null = null;
   folhaParaExcluir: FolhaPagamento | null = null;
+  processando = false;
+  erroOperacao = '';
+  carregandoLista = true;
 
   ngOnInit(): void {
-    this.subscription = this.folhaService.obterTodas().subscribe((folhas) => {
-      this.folhas = folhas;
-      this.aplicarFiltro();
-    });
+    this.subscriptions.add(
+      this.folhaService.obterTodas().subscribe({
+        next: (folhas) => {
+          this.carregandoLista = false;
+          this.folhas = folhas;
+          this.aplicarFiltro();
+        },
+        error: (erro: unknown) => {
+          this.carregandoLista = false;
+          this.definirErro(erro);
+        },
+      })
+    );
   }
 
   ngOnDestroy(): void {
-    this.subscription?.unsubscribe();
+    this.subscriptions.unsubscribe();
   }
 
   aplicarFiltro(): void {
@@ -400,12 +437,19 @@ export class FolhaListaComponent implements OnInit, OnDestroy {
   }
 
   salvarFolha(nomeFuncionario: string): void {
-    if (this.folhaEditando) {
-      this.folhaService.atualizar(this.folhaEditando.id, nomeFuncionario);
-    } else {
-      this.folhaService.criar(nomeFuncionario);
-    }
-    this.fecharForm();
+    if (this.processando) return;
+
+    const operacao = this.folhaEditando
+      ? this.folhaService.atualizar(this.folhaEditando.id, nomeFuncionario)
+      : this.folhaService.criar(nomeFuncionario).pipe(map(() => true));
+
+    this.executarOperacao(operacao, (resultado) => {
+      if (resultado === false) {
+        this.erroOperacao = 'Não foi possível atualizar a folha.';
+        return;
+      }
+      this.fecharForm();
+    });
   }
 
   abrirDetalhes(folha: FolhaPagamento): void {
@@ -417,16 +461,18 @@ export class FolhaListaComponent implements OnInit, OnDestroy {
   }
 
   atualizarFolhaSelecionada(): void {
-    if (this.folhaSelecionada) {
-      const folhaAtualizada = this.folhaService.obterPorId(
-        this.folhaSelecionada.id
-      );
-      if (folhaAtualizada) {
-        this.folhaSelecionada = folhaAtualizada;
-      } else {
-        this.folhaSelecionada = null;
-      }
-    }
+    if (!this.folhaSelecionada) return;
+
+    this.subscriptions.add(
+      this.folhaService.obterPorId(this.folhaSelecionada.id)
+        .pipe(take(1))
+        .subscribe({
+          next: (folhaAtualizada) => {
+            this.folhaSelecionada = folhaAtualizada ?? null;
+          },
+          error: (erro: unknown) => this.definirErro(erro),
+        })
+    );
   }
 
   confirmarExclusao(folha: FolhaPagamento): void {
@@ -434,10 +480,18 @@ export class FolhaListaComponent implements OnInit, OnDestroy {
   }
 
   excluirFolha(): void {
-    if (this.folhaParaExcluir) {
-      this.folhaService.remover(this.folhaParaExcluir.id);
-      this.folhaParaExcluir = null;
-    }
+    if (!this.folhaParaExcluir || this.processando) return;
+
+    this.executarOperacao(
+      this.folhaService.remover(this.folhaParaExcluir.id),
+      (removida) => {
+        if (!removida) {
+          this.erroOperacao = 'A folha não foi encontrada para exclusão.';
+          return;
+        }
+        this.folhaParaExcluir = null;
+      }
+    );
   }
 
   calcularTotalEntradas(folha: FolhaPagamento): number {
@@ -450,5 +504,27 @@ export class FolhaListaComponent implements OnInit, OnDestroy {
 
   calcularTotalLiquido(folha: FolhaPagamento): number {
     return this.folhaService.calcularTotalLiquido(folha);
+  }
+
+  private executarOperacao<T>(
+    operacao: Observable<T>,
+    aoConcluir: (resultado: T) => void
+  ): void {
+    this.processando = true;
+    this.erroOperacao = '';
+    this.subscriptions.add(
+      operacao.pipe(
+        take(1),
+        finalize(() => this.processando = false)
+      ).subscribe({
+        next: aoConcluir,
+        error: (erro: unknown) => this.definirErro(erro),
+      })
+    );
+  }
+
+  private definirErro(erro: unknown): void {
+    this.erroOperacao =
+      erro instanceof Error ? erro.message : 'Não foi possível concluir a operação.';
   }
 }

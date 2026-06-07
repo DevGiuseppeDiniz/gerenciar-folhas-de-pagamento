@@ -97,6 +97,7 @@ As instruções a seguir são uma alternativa para quem prefere executar diretam
 - Bloquear alterações no nome e nos itens de folhas fechadas.
 - Reabrir folhas para permitir novas alterações.
 - Persistir os dados no `localStorage` do navegador.
+- Simular chamadas de API com `Observable` e latência aleatória entre 400 e 900 ms.
 
 ## Regras de negócio
 
@@ -106,6 +107,12 @@ As instruções a seguir são uma alternativa para quem prefere executar diretam
 - O valor do item deve ser maior que zero.
 - Folhas fechadas não permitem alteração do funcionário ou dos itens.
 - Uma folha só pode ser fechada quando seu total líquido for positivo.
+
+## Simulação de API
+
+As leituras e operações de criação, edição, exclusão, fechamento e reabertura retornam `Observable`.
+
+Cada chamada recebe uma latência aleatória entre `400 ms` e `900 ms`. A alteração dos dados só acontece depois desse período, simulando o tempo de resposta de uma API. Falhas de validação são entregues pelo canal `error` do Observable e tratadas pelos componentes.
 
 ## Tecnologias
 

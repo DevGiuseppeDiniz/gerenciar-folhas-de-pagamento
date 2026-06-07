@@ -1,10 +1,11 @@
-import { Component, EventEmitter, Input, Output, inject } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, Output, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FolhaPagamento, Item, ItemTipo } from '../../models/folha-pagamento.model';
 import { FolhaPagamentoService } from '../../services/folha-pagamento.service';
 import { ConfirmModalComponent } from '../confirm-modal/confirm-modal.component';
 import { ItemFormComponent } from '../item-form/item-form.component';
+import { Observable, Subscription, finalize, map, take } from 'rxjs';
 
 @Component({
   selector: 'app-folha-detalhes',
@@ -31,6 +32,10 @@ import { ItemFormComponent } from '../item-form/item-form.component';
         </div>
 
         <div class="modal-body">
+          @if (erroOperacao) {
+            <div class="alert-error" role="alert">{{ erroOperacao }}</div>
+          }
+
           <div class="resumo-financeiro">
             <div class="resumo-card entradas">
               <div class="resumo-icon">
@@ -198,6 +203,16 @@ import { ItemFormComponent } from '../item-form/item-form.component';
     </app-confirm-modal>
   `,
   styles: [`
+    .alert-error {
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      color: #991b1b;
+      background-color: #fee2e2;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+    }
+
     .detalhes-modal {
       max-width: 600px;
       max-height: 90vh;
@@ -386,18 +401,25 @@ import { ItemFormComponent } from '../item-form/item-form.component';
     }
   `]
 })
-export class FolhaDetalhesComponent {
+export class FolhaDetalhesComponent implements OnDestroy {
   @Input() folha!: FolhaPagamento;
   @Output() fechar = new EventEmitter<void>();
   @Output() atualizada = new EventEmitter<void>();
 
   private folhaService = inject(FolhaPagamentoService);
+  private readonly subscriptions = new Subscription();
 
   mostrarFormItem = false;
   itemEditando: Item | null = null;
   itemParaExcluir: Item | null = null;
   mostrarConfirmFechamento = false;
   mostrarConfirmReabertura = false;
+  processando = false;
+  erroOperacao = '';
+
+  ngOnDestroy(): void {
+    this.subscriptions.unsubscribe();
+  }
 
   calcularTotalEntradas(): number {
     return this.folhaService.calcularTotalEntradas(this.folha);
@@ -432,13 +454,22 @@ export class FolhaDetalhesComponent {
   }
 
   salvarItem(dados: { descricao: string; tipo: ItemTipo; valor: number }): void {
-    if (this.itemEditando) {
-      this.folhaService.atualizarItem(this.folha.id, this.itemEditando.id, dados);
-    } else {
-      this.folhaService.adicionarItem(this.folha.id, dados);
-    }
-    this.fecharFormItem();
-    this.atualizada.emit();
+    if (this.processando) return;
+
+    const operacao = this.itemEditando
+      ? this.folhaService.atualizarItem(this.folha.id, this.itemEditando.id, dados)
+      : this.folhaService.adicionarItem(this.folha.id, dados).pipe(
+          map((item) => item !== null)
+        );
+
+    this.executarOperacao(operacao, (resultado) => {
+      if (!resultado) {
+        this.erroOperacao = 'Não foi possível salvar o item.';
+        return;
+      }
+      this.fecharFormItem();
+      this.atualizada.emit();
+    });
   }
 
   confirmarExclusaoItem(item: Item): void {
@@ -450,11 +481,19 @@ export class FolhaDetalhesComponent {
   }
 
   excluirItem(): void {
-    if (this.itemParaExcluir) {
-      this.folhaService.removerItem(this.folha.id, this.itemParaExcluir.id);
-      this.itemParaExcluir = null;
-      this.atualizada.emit();
-    }
+    if (!this.itemParaExcluir || this.processando) return;
+
+    this.executarOperacao(
+      this.folhaService.removerItem(this.folha.id, this.itemParaExcluir.id),
+      (removido) => {
+        if (!removido) {
+          this.erroOperacao = 'Não foi possível remover o item.';
+          return;
+        }
+        this.itemParaExcluir = null;
+        this.atualizada.emit();
+      }
+    );
   }
 
   confirmarFechamento(): void {
@@ -466,9 +505,16 @@ export class FolhaDetalhesComponent {
   }
 
   fecharFolha(): void {
-    this.folhaService.fechar(this.folha.id);
-    this.mostrarConfirmFechamento = false;
-    this.atualizada.emit();
+    if (this.processando) return;
+
+    this.executarOperacao(this.folhaService.fechar(this.folha.id), (fechada) => {
+      if (!fechada) {
+        this.erroOperacao = 'A folha precisa ter total líquido positivo para ser fechada.';
+        return;
+      }
+      this.mostrarConfirmFechamento = false;
+      this.atualizada.emit();
+    });
   }
 
   confirmarReabertura(): void {
@@ -480,8 +526,35 @@ export class FolhaDetalhesComponent {
   }
 
   reabrirFolha(): void {
-    this.folhaService.reabrir(this.folha.id);
-    this.mostrarConfirmReabertura = false;
-    this.atualizada.emit();
+    if (this.processando) return;
+
+    this.executarOperacao(this.folhaService.reabrir(this.folha.id), (reaberta) => {
+      if (!reaberta) {
+        this.erroOperacao = 'Não foi possível reabrir a folha.';
+        return;
+      }
+      this.mostrarConfirmReabertura = false;
+      this.atualizada.emit();
+    });
+  }
+
+  private executarOperacao<T>(
+    operacao: Observable<T>,
+    aoConcluir: (resultado: T) => void
+  ): void {
+    this.processando = true;
+    this.erroOperacao = '';
+    this.subscriptions.add(
+      operacao.pipe(
+        take(1),
+        finalize(() => this.processando = false)
+      ).subscribe({
+        next: aoConcluir,
+        error: (erro: unknown) => {
+          this.erroOperacao =
+            erro instanceof Error ? erro.message : 'Não foi possível concluir a operação.';
+        },
+      })
+    );
   }
 }

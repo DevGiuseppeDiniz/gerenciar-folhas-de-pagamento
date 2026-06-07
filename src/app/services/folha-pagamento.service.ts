@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable, map } from 'rxjs';
+import { BehaviorSubject, Observable, defer, map, switchMap, timer } from 'rxjs';
 import {
   FolhaPagamento,
   FolhaStatus,
@@ -23,6 +23,8 @@ import {
 })
 export class FolhaPagamentoService {
   private readonly STORAGE_KEY = 'folhas_pagamento';
+  private readonly LATENCIA_MINIMA_MS = 400;
+  private readonly LATENCIA_MAXIMA_MS = 900;
   private readonly folhasSubject = new BehaviorSubject<FolhaPagamento[]>([]);
   readonly folhas$ = this.folhasSubject.asObservable();
 
@@ -31,128 +33,146 @@ export class FolhaPagamentoService {
   }
 
   obterTodas(): Observable<FolhaPagamento[]> {
-    return this.folhas$;
+    return this.simularConsultaContinua(this.folhas$);
   }
 
   obterPorStatus(status: FolhaStatus | 'todas'): Observable<FolhaPagamento[]> {
-    return this.folhas$.pipe(
+    const folhasFiltradas$ = this.folhas$.pipe(
       map((folhas) =>
         status === 'todas' ? folhas : folhas.filter((folha) => folha.status === status)
       )
     );
+
+    return this.simularConsultaContinua(folhasFiltradas$);
   }
 
-  obterPorId(id: string): FolhaPagamento | undefined {
-    return this.folhasSubject.value.find((folha) => folha.id === id);
+  obterPorId(id: string): Observable<FolhaPagamento | undefined> {
+    return this.simularRequisicao(() => this.obterPorIdAtual(id));
   }
 
-  criar(nomeFuncionario: string): FolhaPagamento {
-    this.validarNome(nomeFuncionario);
-    const agora = new Date();
-    const novaFolha: FolhaPagamento = {
-      id: gerarId(),
-      nomeFuncionario: nomeFuncionario.trim(),
-      status: 'aberta',
-      itens: [],
-      criadaEm: agora,
-      atualizadaEm: agora,
-    };
+  criar(nomeFuncionario: string): Observable<FolhaPagamento> {
+    return this.simularRequisicao(() => {
+      this.validarNome(nomeFuncionario);
+      const agora = new Date();
+      const novaFolha: FolhaPagamento = {
+        id: gerarId(),
+        nomeFuncionario: nomeFuncionario.trim(),
+        status: 'aberta',
+        itens: [],
+        criadaEm: agora,
+        atualizadaEm: agora,
+      };
 
-    this.folhasSubject.next([...this.folhasSubject.value, novaFolha]);
-    this.salvarNoStorage();
-    return novaFolha;
+      this.folhasSubject.next([...this.folhasSubject.value, novaFolha]);
+      this.salvarNoStorage();
+      return novaFolha;
+    });
   }
 
-  atualizar(id: string, nomeFuncionario: string): boolean {
-    this.validarNome(nomeFuncionario);
-    const folha = this.obterPorId(id);
-    if (!folha || folha.status === 'fechada') return false;
+  atualizar(id: string, nomeFuncionario: string): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      this.validarNome(nomeFuncionario);
+      const folha = this.obterPorIdAtual(id);
+      if (!folha || folha.status === 'fechada') return false;
 
-    this.atualizarFolha(id, { nomeFuncionario: nomeFuncionario.trim() });
-    this.salvarNoStorage();
-    return true;
+      this.atualizarFolha(id, { nomeFuncionario: nomeFuncionario.trim() });
+      this.salvarNoStorage();
+      return true;
+    });
   }
 
-  remover(id: string): boolean {
-    const folhas = this.folhasSubject.value.filter((folha) => folha.id !== id);
-    if (folhas.length === this.folhasSubject.value.length) return false;
+  remover(id: string): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      const folhas = this.folhasSubject.value.filter((folha) => folha.id !== id);
+      if (folhas.length === this.folhasSubject.value.length) return false;
 
-    this.folhasSubject.next(folhas);
-    this.salvarNoStorage();
-    return true;
+      this.folhasSubject.next(folhas);
+      this.salvarNoStorage();
+      return true;
+    });
   }
 
-  fechar(id: string): boolean {
-    const folha = this.obterPorId(id);
-    if (!folha || folha.status === 'fechada' || !podeFecharFolha(folha)) {
-      return false;
-    }
+  fechar(id: string): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      const folha = this.obterPorIdAtual(id);
+      if (!folha || folha.status === 'fechada' || !podeFecharFolha(folha)) {
+        return false;
+      }
 
-    this.atualizarFolha(id, { status: 'fechada' });
-    this.salvarNoStorage();
-    return true;
+      this.atualizarFolha(id, { status: 'fechada' });
+      this.salvarNoStorage();
+      return true;
+    });
   }
 
-  reabrir(id: string): boolean {
-    const folha = this.obterPorId(id);
-    if (!folha || folha.status === 'aberta') return false;
+  reabrir(id: string): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      const folha = this.obterPorIdAtual(id);
+      if (!folha || folha.status === 'aberta') return false;
 
-    this.atualizarFolha(id, { status: 'aberta' });
-    this.salvarNoStorage();
-    return true;
+      this.atualizarFolha(id, { status: 'aberta' });
+      this.salvarNoStorage();
+      return true;
+    });
   }
 
-  adicionarItem(folhaId: string, item: Omit<Item, 'id'>): Item | null {
-    this.validarItem(item);
-    const folha = this.obterPorId(folhaId);
-    if (!folha || folha.status === 'fechada') return null;
+  adicionarItem(folhaId: string, item: Omit<Item, 'id'>): Observable<Item | null> {
+    return this.simularRequisicao(() => {
+      this.validarItem(item);
+      const folha = this.obterPorIdAtual(folhaId);
+      if (!folha || folha.status === 'fechada') return null;
 
-    const novoItem: Item = {
-      id: gerarId(),
-      descricao: item.descricao.trim(),
-      tipo: item.tipo,
-      valor: item.valor,
-    };
+      const novoItem: Item = {
+        id: gerarId(),
+        descricao: item.descricao.trim(),
+        tipo: item.tipo,
+        valor: item.valor,
+      };
 
-    this.atualizarFolha(folhaId, { itens: [...folha.itens, novoItem] });
-    this.salvarNoStorage();
-    return novoItem;
+      this.atualizarFolha(folhaId, { itens: [...folha.itens, novoItem] });
+      this.salvarNoStorage();
+      return novoItem;
+    });
   }
 
   atualizarItem(
     folhaId: string,
     itemId: string,
     dados: Partial<Omit<Item, 'id'>>
-  ): boolean {
-    const folha = this.obterPorId(folhaId);
-    if (!folha || folha.status === 'fechada') return false;
+  ): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      const folha = this.obterPorIdAtual(folhaId);
+      if (!folha || folha.status === 'fechada') return false;
 
-    const itemAtual = folha.itens.find((item) => item.id === itemId);
-    if (!itemAtual) return false;
+      const itemAtual = folha.itens.find((item) => item.id === itemId);
+      if (!itemAtual) return false;
 
-    const itemAtualizado = { ...itemAtual, ...dados };
-    this.validarItem(itemAtualizado);
-    this.atualizarFolha(folhaId, {
-      itens: folha.itens.map((item) =>
-        item.id === itemId
-          ? { ...itemAtualizado, descricao: itemAtualizado.descricao.trim() }
-          : item
-      ),
+      const itemAtualizado = { ...itemAtual, ...dados };
+      this.validarItem(itemAtualizado);
+      this.atualizarFolha(folhaId, {
+        itens: folha.itens.map((item) =>
+          item.id === itemId
+            ? { ...itemAtualizado, descricao: itemAtualizado.descricao.trim() }
+            : item
+        ),
+      });
+      this.salvarNoStorage();
+      return true;
     });
-    this.salvarNoStorage();
-    return true;
   }
 
-  removerItem(folhaId: string, itemId: string): boolean {
-    const folha = this.obterPorId(folhaId);
-    if (!folha || folha.status === 'fechada') return false;
+  removerItem(folhaId: string, itemId: string): Observable<boolean> {
+    return this.simularRequisicao(() => {
+      const folha = this.obterPorIdAtual(folhaId);
+      if (!folha || folha.status === 'fechada') return false;
 
-    const itens = folha.itens.filter((item) => item.id !== itemId);
-    if (itens.length === folha.itens.length) return false;
+      const itens = folha.itens.filter((item) => item.id !== itemId);
+      if (itens.length === folha.itens.length) return false;
 
-    this.atualizarFolha(folhaId, { itens });
-    this.salvarNoStorage();
-    return true;
+      this.atualizarFolha(folhaId, { itens });
+      this.salvarNoStorage();
+      return true;
+    });
   }
 
   calcularTotalEntradas(folha: FolhaPagamento): number {
@@ -178,6 +198,31 @@ export class FolhaPagamentoService {
           : folha
       )
     );
+  }
+
+  private obterPorIdAtual(id: string): FolhaPagamento | undefined {
+    return this.folhasSubject.value.find((folha) => folha.id === id);
+  }
+
+  private simularRequisicao<T>(operacao: () => T): Observable<T> {
+    return defer(() =>
+      timer(this.gerarLatencia()).pipe(
+        map(() => operacao())
+      )
+    );
+  }
+
+  private simularConsultaContinua<T>(fonte: Observable<T>): Observable<T> {
+    return defer(() =>
+      timer(this.gerarLatencia()).pipe(
+        switchMap(() => fonte)
+      )
+    );
+  }
+
+  private gerarLatencia(): number {
+    const intervalo = this.LATENCIA_MAXIMA_MS - this.LATENCIA_MINIMA_MS;
+    return this.LATENCIA_MINIMA_MS + Math.floor(Math.random() * (intervalo + 1));
   }
 
   private validarNome(nomeFuncionario: string): void {
